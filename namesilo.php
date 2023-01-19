@@ -1,17 +1,17 @@
 <?php
 
-/*****************************************/
-/* Set WHMCS Configuration Variables     */
-/*****************************************/
+if (!defined("WHMCS")) {
+    die("This file cannot be accessed directly");
+}
 
-//Lookup dependencies
 use WHMCS\Domains\DomainLookup\ResultsList;
 use WHMCS\Domains\DomainLookup\SearchResult;
-
-#Price sync dependencies
-//use WHMCS\Domains\DomainLookup\ResultsList;
 use WHMCS\Domain\TopLevel\ImportItem;
+use WHMCS\Results\ResultsList as GtldResultsList;
 
+/*****************************************/
+/* Set WHMCS Configuration Variables	 */
+/*****************************************/
 function namesilo_getConfigArray()
 {
 
@@ -19,13 +19,10 @@ function namesilo_getConfigArray()
         "Live_API_Key" => array("Type" => "text", "Size" => "30", "Description" => "Enter your Live API Key",),
         "Sandbox_API_Key" => array("Type" => "text", "Size" => "30", "Description" => "Enter your Sandbox API Key (Optional)",),
         "Payment_ID" => array("Type" => "text", "Size" => "20", "Description" => "Enter your Payment ID (Optional)",),
-        "Sandbox_Payment_ID" => array("Type" => "text", "Size" => "20", "Description" => "Enter your Sandbox Payment ID (Optional)",),
-//        "Coupon" => array("Type" => "text", "Size" => "20", "Description" => "Enter your Reseller Discount Coupon (Optional)",),
+        "Coupon" => array("Type" => "text", "Size" => "20", "Description" => "Enter your Reseller Discount Coupon (Optional)",),
         "Test_Mode" => array("Type" => "yesno", 'Description' => "Enable this option ONLY if you have a Sandbox account (Optional)"),
         "Auto_Renew" => array("Type" => "yesno", 'Description' => "Do you want new domain registrations to automatically renew at NameSilo?"),
-        "Default_Privacy" => array("Type" => "yesno", 'Description' => "Do you want to enable WHOIS privacy by default on registrations and transfers?"),
-        "Delete_Default_DNS" => array("Type" => "yesno", 'Description' => "Do you want to delete the default DNS records when the default name servers are used on registrations?"),
-        "Sync_Next_Due_Date" => array("Type" => "yesno", 'Description' => "Tick this box if you want the expiry date sync script to update both expiry and next due dates. If left unchecked it will only update the domain expiration date. (cron must be configured)"),
+//        "Sync_Next_Due_Date" => array("Type" => "yesno", 'Description' => "Tick this box if you want the expiry date sync script to update both expiry and next due dates. If left unchecked it will only update the domain expiration date. (cron must be configured)"),
         "Debug_Recipient" => array("Type" => "text", "Size" => "30", "Description" => "Enter the email address where debug emails should be sent",),
         "Debug_ON" => array("Type" => "yesno", 'Description' => "Enable this option ONLY if you want debug emails"),
     );
@@ -35,13 +32,13 @@ function namesilo_getConfigArray()
 }
 
 /*****************************************/
-/* Define API Servers                    */
+/* Define API Servers					 */
 /*****************************************/
 define('LIVE_API_SERVER', 'https://www.namesilo.com');
-define('TEST_API_SERVER', 'https://sandbox.namesilo.com');
+define('TEST_API_SERVER', 'https://dev.namesilo.net');
 
 /*****************************************/
-/* Transaction Processor                 */
+/* Transaction Processor				 */
 /*****************************************/
 function namesilo_transactionCall($callType, $call, $params)
 {
@@ -62,22 +59,9 @@ function namesilo_transactionCall($callType, $call, $params)
     $response = [];
 
     # Process Result
-    
     if (!$err) {
-        $xmlErrorDisplay = libxml_use_internal_errors(true);
-            
-        try {
-            $xml = new SimpleXMLElement($content);
-        } catch(Exception $excp) {
-            $err = -1;
-            $errmsg = $excp->getMessage();
-        } finally {
-            libxml_clear_errors();
-            libxml_use_internal_errors($xmlErrorDisplay);
-        }
-    }
-    
-    if (!$err) {
+        $xml = new SimpleXMLElement($content);
+
         $code = (int)$xml->reply->code;
         $detail = (string)$xml->reply->detail;
 //        $message = (string)$xml->reply->message;
@@ -85,20 +69,26 @@ function namesilo_transactionCall($callType, $call, $params)
         switch ($callType) {
             case "Standard":
 
-                if ($code == '300') {
+                if ($code == '300' || $code == '301' || $code == '302') {
                     $response = [];
                     break;
                 }
 
                 $response['error'] = $detail;
-                
-                if ($code == '301' || $code == '302') {
-                    $response['error'] .= ' - ' . (string)$xml->reply->message;
-                }
                 break;
+            case 'full':
             case 'domainSync':
 
                 return $xml->reply;
+
+            case 'tldPricing':
+
+                if ($code == '300') {
+                    $response['tlds'] = $xml->reply->tlds;
+                }
+
+                $response['error'] = $detail;
+                break;
 
             case "getRegistrarLock":
 
@@ -209,44 +199,6 @@ function namesilo_transactionCall($callType, $call, $params)
 
                 $response['error'] = $detail;
                 break;
-            case "domainAvailability":
-                if ($code == "300") {
-                    $response["domains"] = [];
-                    if (isset($xml->reply->available)) {
-                        foreach ($xml->reply->available->domain as $aDomain) {
-                            $response["domains"][] = array("domain" => (string)$aDomain, "price" => (string)$aDomain["price"], "premium" => (string)$aDomain["premium"], "status" => "available");
-                        }
-                    }
-                    
-                    if (isset($xml->reply->unavailable)) {                      
-                        foreach ($xml->reply->unavailable->domain as $uDomain) {
-                            $response["domains"][] = array("domain" => (string)$uDomain, "price" => "0.00", "premium" => "0", "status" => "unavailable");
-                        }
-                    }
-                    
-                    if (isset($xml->reply->invalid)) {                      
-                        foreach ($xml->reply->invalid->domain as $iDomain) {
-                            $response["domains"][] = array("domain" => (string)$iDomain, "price" => "0.00", "premium" => "0", "status" => "invalid");
-                        }
-                    }
-                    break;
-                }
-                
-                $response['error'] = $detail;
-                break;
-            case "domainPricing":
-            if ($code == "300") {
-                $response["prices"] = [];
-                foreach ($xml->reply->children() as $tld) {
-                    if ($tld->count() === 3) {
-                        $response["prices"][] = array("tld" => (string)$tld->getName(), "registration" => (string)$tld->registration, "renew" => (string)$tld->renew, "transfer" => (string)$tld->transfer);
-                    }
-                }
-                break;
-            }
-            
-            $response['error'] = $detail;
-            break;
         }
 
     } else {
@@ -282,160 +234,13 @@ function namesilo_transactionCall($callType, $call, $params)
             break;
         }
     }
-    logModuleCall("Namesilo",$action[0],$call,$content,$response, [$apikey]);
-    
-    //Handling for 301 and 302 codes
-    if ($callType == "Standard" && ($code == '301' || $code == '302')) {
-        $response = [];
-    }
+	logModuleCall("Namesilo",$action[0],$call,$content,$response, [$apikey]);
 
     return $response;
 }
 
 /*****************************************/
-/* Process .us/.ca params                */
-/*****************************************/
-function namesilo__convertUsParams($whmcsNexusCategory, $whmcsApplicationPurpose) {
-    $nsUsData = [];
-    
-    $nsUsData['usnc'] = urlencode($whmcsNexusCategory);
-    
-    $applicationPurposeCodes = [
-        ['name' => 'Business use for profit', 'code' => 'P1'],
-        ['name' => 'Club', 'code' => 'P2'],
-        ['name' => 'Association', 'code' => 'P2'],
-        ['name' => 'Religious Organization', 'code' => 'P2'],
-        ['name' => 'Non-profit business', 'code' => 'P2'],
-        ['name' => 'Personal Use', 'code' => 'P3'],
-        ['name' => 'Educational purposes', 'code' => 'P4'],
-        ['name' => 'Government purposes', 'code' => 'P5']
-    ];
-    
-    $nsUsData['usap'] = '';
-    
-    foreach ($applicationPurposeCodes as $ap) {
-        if ($ap['name'] == $whmcsApplicationPurpose) {
-            $nsUsData['usap'] = urlencode($ap['code']);
-            break;
-        }
-    }
-    
-    return $nsUsData;
-}
-
-function namesilo__convertCaParams($whmcslegalType, $whmcsCiraWhoisPivacy) {
-    $nsCaData = [];
-    
-    $nsCaData['caln'] = urlencode('en');
-    $nsCaData['caag'] = urlencode('2.0');
-    
-    //API requires inverted values for WHOIS privacy
-    if ($whmcsCiraWhoisPivacy == 'on') {
-        $nsCaData['cawd'] = urlencode('0');
-    } else {
-        $nsCaData['cawd'] = urlencode('1');
-    }
-    
-    $nsCaData['calf'] = '';
-    
-    $legalTypeCodes = [
-        ['name' => 'Corporation', 'code' => 'CCO'],
-        ['name' => 'Canadian Citizen', 'code' => 'CCT'],
-        ['name' => 'Permanent Resident of Canada', 'code' => 'RES'],
-        ['name' => 'Government', 'code' => 'GOV'],
-        ['name' => 'Canadian Educational Institution', 'code' => 'EDU'],
-        ['name' => 'Canadian Unincorporated Association', 'code' => 'ASS'],
-        ['name' => 'Canadian Hospital', 'code' => 'HOP'],
-        ['name' => 'Partnership Registered in Canada', 'code' => 'PRT'],
-        ['name' => 'Trade-mark registered in Canada', 'code' => 'TDM'],
-        ['name' => 'Canadian Trade Union', 'code' => 'TRD'],
-        ['name' => 'Canadian Political Party', 'code' => 'PLT'],
-        ['name' => 'Canadian Library Archive or Museum', 'code' => 'LAM'],
-        ['name' => 'Trust established in Canada', 'code' => 'TRS'],
-        ['name' => 'Aboriginal Peoples', 'code' => 'ABO'],
-        ['name' => 'Legal Representative of a Canadian Citizen', 'code' => 'LGR'],
-        ['name' => 'Official mark registered in Canada', 'code' => 'OMK']
-    ];
-    
-    foreach ($legalTypeCodes as $lt) {
-        if ($lt['name'] == $whmcslegalType) {
-            $nsCaData['calf'] = urlencode($lt['code']);
-            break;
-        }
-    }
-    
-    return $nsCaData;
-}
-
-/*****************************************/
-/* Process WHOIS privacy support         */
-/*****************************************/
-function namesilo__whoisPrivacySupported($tld) {
-    $notSupportedTlds = ['us', 'in', 'tickets', 'nl', 'eu', 'uk', 'at'];
-    
-    $tld = preg_replace('/^\./', '', $tld);
-    
-    if (in_array($tld, $notSupportedTlds)) {
-        return false;
-    }
-    
-    return true;
-}
-
-/*****************************************/
-/* Remove all DNS records                */
-/*****************************************/
-function namesilo__deleteDnsRecords($params) {
-    # Set Appropriate API Server
-    $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
-    # Set Appropriate API Key
-    $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
-    # Register Variables
-    $tld = urlencode($params["tld"]);
-    $sld = urlencode($params["sld"]);
-    
-    $result = [];
-    # Get domain DNS records
-    $response = namesilo_transactionCall('listDNS', $apiServerUrl . "/api/dnsListRecords?version=1&type=xml&key=$apiKey&domain=$sld.$tld", $params);
-    
-    if (!(isset($response['error']))) {
-        foreach ($response as $dnsRecord) {
-            #Remove each record using its code, collect responses from transactionCall
-            $result[] = namesilo_transactionCall('Standard', $apiServerUrl . "/api/dnsDeleteRecord?version=1&type=xml&key=$apiKey&domain=$sld.$tld&rrid=" . urlencode($dnsRecord['record_id']), $params);
-        }
-    } else {
-        $result[] = $response['error'];
-    }
-    
-    return $result;
-}
-
-/*****************************************/
-/* Create contact and run action         */
-/*****************************************/
-function namesilo__registerContactAction($contactAddCall, $actionCall, $params, $vars) {
-//Registers a contact then uses that contact to run an API call
-//Required apiServerUrl, apiKey in $vars
-    
-    $contactAddResult = namesilo_transactionCall('contactAdd', $contactAddCall, $params);
-        
-    if (isset($contactAddResult['error'])) {
-        return ['error' => $contactAddResult['error']];
-    }
-    
-    $actionCall .= '&contact_id=' . $contactAddResult['new_contact_id'];
-    
-    $actionResult = namesilo_transactionCall("Standard", $actionCall, $params);
-    
-    if (isset($actionResult['error'])) {
-        namesilo_transactionCall("Standard", $vars['apiServerUrl'] . "/api/contactDelete?version=1&type=xml&key=" . $vars['apiKey'] . "&contact_id=" . $contactAddResult['new_contact_id'], $params);
-    }
-    
-    return $actionResult;
-}
-
-/*****************************************/
-/* Retrieve Domain's Name Servers        */
+/* Retrieve Domain's Name Servers		 */
 /*****************************************/
 function namesilo_GetNameservers($params)
 {
@@ -451,7 +256,7 @@ function namesilo_GetNameservers($params)
 }
 
 /*****************************************/
-/* Update Domain's Name Servers          */
+/* Update Domain's Name Servers			 */
 /*****************************************/
 function namesilo_SaveNameservers($params)
 {
@@ -475,7 +280,7 @@ function namesilo_SaveNameservers($params)
 }
 
 /*****************************************/
-/* Retrieve Registrar Lock Status        */
+/* Retrieve Registrar Lock Status		 */
 /*****************************************/
 function namesilo_GetRegistrarLock($params)
 {
@@ -493,7 +298,7 @@ function namesilo_GetRegistrarLock($params)
 }
 
 /*****************************************/
-/* Update Registrar Lock Status          */
+/* Update Registrar Lock Status			 */
 /*****************************************/
 function namesilo_SaveRegistrarLock($params)
 {
@@ -518,11 +323,10 @@ function namesilo_SaveRegistrarLock($params)
 
 /*
 /*****************************************/
-/* Retrieve DNS Records for a Domain     */
+/* Retrieve DNS Records for a Domain	 */
 /*****************************************/
 function namesilo_GetDNS($params)
 {
-//subdomain forwarding handling
     # Set Appropriate API Server
     $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
     # Set Appropriate API Key
@@ -554,7 +358,7 @@ function namesilo_GetDNS($params)
 }
 
 /*****************************************/
-/* Update DNS Records for a Domain       */
+/* Update DNS Records for a Domain		 */
 /*****************************************/
 function namesilo_SaveDNS($params)
 {
@@ -614,7 +418,7 @@ function namesilo_SaveDNS($params)
 
             $hostname = $values["hostname"];
             $type = $values["type"];
-            $address = $values["address"];
+            $address = urlencode($values["address"]);
             $priority = $values["priority"];
             # Check to make sure there is something to add
             //if (empty($hostname) || empty($address)) { continue; }
@@ -656,7 +460,7 @@ function namesilo_SaveDNS($params)
 }
 
 /*****************************************/
-/* Register New Domain                   */
+/* Register New Domain					 */
 /*****************************************/
 function namesilo_RegisterDomain($params)
 {
@@ -665,13 +469,12 @@ function namesilo_RegisterDomain($params)
     # Set Appropriate API Key
     $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
     # Set Appropriate Private Trigger
-    $private = "0";
+    $private = $params["idprotection"];
     # Set Appropriate Auto-Renew Trigger
     $auto_renew = ($params['Auto_Renew'] == "on") ? '1' : '0';
     # Register Variables;
-    $paymentid = ($params['Test_Mode'] == 'on') ? $params['Sandbox_Payment_ID'] : $params['Payment_ID'];
-    $deleteDefaultDns = $params['Delete_Default_DNS'] == 'on';
-    //$coupon = urlencode($params["Coupon"]);
+    $paymentid = $params["Payment_ID"];
+    $coupon = urlencode($params["Coupon"]);
     $tld = urlencode($params["tld"]);
     $sld = urlencode($params["sld"]);
     $regperiod = $params["regperiod"];
@@ -691,126 +494,14 @@ function namesilo_RegisterDomain($params)
     $RegistrantCountry = urlencode($params["country"]);
     $RegistrantEmailAddress = urlencode($params["email"]);
     $RegistrantPhone = urlencode($params["phonenumber"]);
-    
-    if (($params["idprotection"] || $params['Default_Privacy'] == "on") && namesilo__whoisPrivacySupported($tld)) {
-        $private = "1";
-    }
-    
     # Transaction Call
-    //US-CA handling
-    if (strtolower($params['tld']) == 'ca' || strtolower($params['tld']) == 'us') {
-        $vars = array(
-            'apiServerUrl' => $apiServerUrl,
-            'apiKey' => $apiKey,
-            'RegistrantFirstName' => $RegistrantFirstName,
-            'RegistrantLastName' => $RegistrantLastName,
-            'RegistrantAddress1' => $RegistrantAddress1,
-            'RegistrantAddress2' => $RegistrantAddress2,
-            'RegistrantCity' => $RegistrantCity,
-            'RegistrantStateProvince' => $RegistrantStateProvince,
-            'RegistrantPostalCode' => $RegistrantPostalCode,
-            'RegistrantCountry' => $RegistrantCountry,
-            'RegistrantEmailAddress' => $RegistrantEmailAddress,
-            'RegistrantPhone' => $RegistrantPhone,
-            'sld' => $sld,
-            'tld' => $tld,
-            'regperiod' => $regperiod,
-            'paymentid' => $paymentid,
-            'private' => $private,
-            'nameserver1' => $nameserver1,
-            'nameserver2' => $nameserver2,
-            'nameserver3' => $nameserver3,
-            'nameserver4' => $nameserver4,
-            'nameserver5' => $nameserver5,
-            'auto_renew' => $auto_renew
-        );
-        
-        if (strtolower($params['tld']) == 'ca') {
-            $values = namesilo__registerCaDomain($vars, $params);
-        } elseif (strtolower($params['tld']) == 'us') {
-            $values = namesilo__registerUsDomain($vars, $params);
-        }
-    } else {
-    //Regular registration call
-        $values = namesilo_transactionCall("Standard", $apiServerUrl . "/api/registerDomain?version=1&type=xml&key=$apiKey&domain=$sld.$tld&years=$regperiod&payment_id=$paymentid&private=$private&ns1=$nameserver1&ns2=$nameserver2&ns3=$nameserver3&ns4=$nameserver4&ns5=$nameserver5&fn=$RegistrantFirstName&ln=$RegistrantLastName&ad=$RegistrantAddress1&ad2=$RegistrantAddress2&cy=$RegistrantCity&st=$RegistrantStateProvince&zp=$RegistrantPostalCode&ct=$RegistrantCountry&em=$RegistrantEmailAddress&ph=$RegistrantPhone&auto_renew=$auto_renew", $params);
-    }
-    
-    # Delete default DNS records if the domain uses namesilo name servers
-    if ($deleteDefaultDns) {
-        //Use API to get name servers
-        //Default name servers are used when the API call doesn't include them, when the name servers have errors or when requested
-        $domainNameServers = namesilo_transactionCall("getNameServers", $apiServerUrl . "/api/getDomainInfo?version=1&type=xml&key=$apiKey&domain=$sld.$tld", $params);
-        $namesiloNameServers = ['ns1.dnsowl.com', 'ns2.dnsowl.com', 'ns3.dnsowl.com'. 'premium-ns1.dnsowl.com', 'premium-ns2.dnsowl.com', 'premium-ns3.dnsowl.com'];
-        
-        foreach ($domainNameServers as $nsKey => $nsValue) {
-            if (in_array(strtolower($nsValue), $namesiloNameServers)) {
-                //If a name server matches the defaults, delete (default) DNS records
-                namesilo__deleteDnsRecords($params);
-                break;
-            }
-        }
-    }
-    
-    if (isset($values['error'])) {
-        if ($values['error'] == 'Invalid number of years, or no years provided.' && $regperiod > 0 && $regperiod <= 10) {
-            $values['error'] = 'Invalid number of years, or no years provided. If a valid number was entered the domain does not support multiple year registrations at the moment, to add extra years please regsiter the domain for one year then  use the renewal process to add extra years.';
-        }
-    }
-    
+    $values = namesilo_transactionCall("Standard", $apiServerUrl . "/api/registerDomain?version=1&type=xml&key=$apiKey&domain=$sld.$tld&years=$regperiod&payment_id=$paymentid&coupon=$coupon&private=$private&ns1=$nameserver1&ns2=$nameserver2&ns3=$nameserver3&ns4=$nameserver4&ns5=$nameserver5&fn=$RegistrantFirstName&ln=$RegistrantLastName&ad=$RegistrantAddress1&ad2=$RegistrantAddress2&cy=$RegistrantCity&st=$RegistrantStateProvince&zp=$RegistrantPostalCode&ct=$RegistrantCountry&em=$RegistrantEmailAddress&ph=$RegistrantPhone&auto_renew=$auto_renew", $params);
     # Return Results
     return $values;
 }
 
 /*****************************************/
-/* TLD specific registrations            */
-/*****************************************/
-function namesilo__registerContactDomain($contactAddCall, $registrationCall, $params, $vars) {
-//Registers a contact then uses that contact to register a domain
-//Required apiKey in $vars
-    
-    return namesilo__registerContactAction($contactAddCall, $registrationCall, $params, $vars);
-}
-
-function namesilo__registerUsDomain($vars, $params) {
-//Required vars: apiServerUrl, apiKey, RegistrantFirstName, RegistrantLastName, RegistrantAddress1, RegistrantAddress2, RegistrantCity, RegistrantStateProvince, RegistrantPostalCode, RegistrantCountry, RegistrantEmailAddress, RegistrantPhone, sld, tld, regperiod, paymentid, private, nameserver1, nameserver2, nameserver3, nameserver4, nameserver5, auto_renew
-    
-    $tldParams = namesilo__convertUsParams($params['additionalfields']['Nexus Category'], $params['additionalfields']['Application Purpose']);
-    
-    $newContactCall = $vars['apiServerUrl'] . "/api/contactAdd?version=1&type=xml&key=" . $vars['apiKey'] . "&fn=" . $vars['RegistrantFirstName'] . "&ln=" . $vars['RegistrantLastName'] . "&ad=" . $vars['RegistrantAddress1'] . "&ad2=" . $vars['RegistrantAddress2'] . "&cy=" . $vars['RegistrantCity'] . "&st=" . $vars['RegistrantStateProvince'] . "&zp=" . $vars['RegistrantPostalCode'] . "&ct=" . $vars['RegistrantCountry'] . "&em=" . $vars['RegistrantEmailAddress'] . "&ph=" . $vars['RegistrantPhone'];
-    
-    foreach ($tldParams as $apiParam => $apiVal) {
-        $newContactCall .= '&' . $apiParam . '=' . $apiVal;
-    }
-    
-    $newRegistrationCall = $vars['apiServerUrl'] . "/api/registerDomain?version=1&type=xml&key=" . $vars['apiKey'] . "&domain=" . $vars['sld'] . "." . $vars['tld'] . "&years=" . $vars['regperiod'] . "&payment_id=" . $vars['paymentid'] . "&private=" . $vars['private'] . "&ns1=" . $vars['nameserver1'] . "&ns2=" . $vars['nameserver2'] . "&ns3=" . $vars['nameserver3'] . "&ns4=" . $vars['nameserver4'] . "&ns5=" . $vars['nameserver5'] . "&auto_renew=" . $vars['auto_renew'];
-    
-    return namesilo__registerContactDomain($newContactCall, $newRegistrationCall, $params, $vars);
-}
-
-function namesilo__registerCaDomain($vars, $params) {
-//Required vars: apiServerUrl, apiKey, RegistrantFirstName, RegistrantLastName, RegistrantAddress1, RegistrantAddress2, RegistrantCity, RegistrantStateProvince, RegistrantPostalCode, RegistrantCountry, RegistrantEmailAddress, RegistrantPhone, sld, tld, regperiod, paymentid, private, nameserver1, nameserver2, nameserver3, nameserver4, nameserver5, auto_renew
-
-    if ($params['additionalfields']['CIRA Agreement'] != 'on') {
-        return ['error' => 'CIRA agreement not accepted.'];
-    }
-    
-    $params['additionalfields']['WHOIS Opt-out'] == 'on' || $private == "1" ? $caWhoisPrivacy = 'on' : $caWhoisPrivacy = '';
-        
-    $tldParams = namesilo__convertCaParams($params['additionalfields']['Legal Type'], $caWhoisPrivacy);
-    
-    $newContactCall = $vars['apiServerUrl'] . "/api/contactAdd?version=1&type=xml&key=" . $vars['apiKey'] . "&fn=" . $vars['RegistrantFirstName'] . "&ln=" . $vars['RegistrantLastName'] . "&ad=" . $vars['RegistrantAddress1'] . "&ad2=" . $vars['RegistrantAddress2'] . "&cy=" . $vars['RegistrantCity'] . "&st=" . $vars['RegistrantStateProvince'] . "&zp=" . $vars['RegistrantPostalCode'] . "&ct=" . $vars['RegistrantCountry'] . "&em=" . $vars['RegistrantEmailAddress'] . "&ph=" . $vars['RegistrantPhone'];
-    
-    foreach ($tldParams as $apiParam => $apiVal) {
-        $newContactCall .= '&' . $apiParam . '=' . $apiVal;
-    }
-    
-    $newRegistrationCall = $vars['apiServerUrl'] . "/api/registerDomain?version=1&type=xml&key=" . $vars['apiKey'] . "&domain=" . $vars['sld'] . "." . $vars['tld'] . "&years=" . $vars['regperiod'] . "&payment_id=" . $vars['paymentid'] . "&private=" . $vars['private'] . "&ns1=" . $vars['nameserver1'] . "&ns2=" . $vars['nameserver2'] . "&ns3=" . $vars['nameserver3'] . "&ns4=" . $vars['nameserver4'] . "&ns5=" . $vars['nameserver5'] . "&auto_renew=" . $vars['auto_renew'];
-    
-    return namesilo__registerContactDomain($newContactCall, $newRegistrationCall, $params, $vars);
-}
-
-/*****************************************/
-/* Initiate Domain Transfer              */
+/* Initiate Domain Transfer				 */
 /*****************************************/
 function namesilo_TransferDomain($params)
 {
@@ -819,15 +510,16 @@ function namesilo_TransferDomain($params)
     # Set Appropriate API Key
     $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
     # Set Appropriate Private Trigger
-    $private = "0";
+    $private = $params["idprotection"];
     # Set Appropriate Auto-Renew Trigger
     $auto_renew = ($params['Auto_Renew'] == "on") ? '1' : '0';
     # Register Variables
-    $paymentid = ($params['Test_Mode'] == 'on') ? $params['Sandbox_Payment_ID'] : $params['Payment_ID'];
-    //$coupon = urlencode($params["Coupon"]);
+    $paymentid = $params["Payment_ID"];
+    $coupon = urlencode($params["Coupon"]);
     $tld = urlencode($params["tld"]);
     $sld = urlencode($params["sld"]);
-    $transfersecret = urlencode($params["transfersecret"]);
+    # EPP auth code
+    $transfersecret = 'base64:' . base64_encode($params["transfersecret"]);
     # Registrant Details
     $RegistrantFirstName = urlencode($params["firstname"]);
     $RegistrantLastName = urlencode($params["lastname"]);
@@ -839,99 +531,14 @@ function namesilo_TransferDomain($params)
     $RegistrantCountry = urlencode($params["country"]);
     $RegistrantEmailAddress = urlencode($params["email"]);
     $RegistrantPhone = urlencode($params["phonenumber"]);
-    
-    if (($params["idprotection"] || $params['Default_Privacy'] == "on") && namesilo__whoisPrivacySupported($tld)) {
-        $private = "1";
-    }
-    
     # Transaction Call
-    //US-CA handling
-    if (strtolower($params['tld']) == 'ca' || strtolower($params['tld']) == 'us') {
-        $vars = array(
-            'apiServerUrl' => $apiServerUrl,
-            'apiKey' => $apiKey,
-            'RegistrantFirstName' => $RegistrantFirstName,
-            'RegistrantLastName' => $RegistrantLastName,
-            'RegistrantAddress1' => $RegistrantAddress1,
-            'RegistrantAddress2' => $RegistrantAddress2,
-            'RegistrantCity' => $RegistrantCity,
-            'RegistrantStateProvince' => $RegistrantStateProvince,
-            'RegistrantPostalCode' => $RegistrantPostalCode,
-            'RegistrantCountry' => $RegistrantCountry,
-            'RegistrantEmailAddress' => $RegistrantEmailAddress,
-            'RegistrantPhone' => $RegistrantPhone,
-            'sld' => $sld,
-            'tld' => $tld,
-            'transfersecret' => $transfersecret,
-            'paymentid' => $paymentid,
-            'private' => $private,
-            'auto_renew' => $auto_renew
-        );
-        
-        if (strtolower($params['tld']) == 'ca') {
-            $values = namesilo__transferCaDomain($vars, $params);
-        } elseif (strtolower($params['tld']) == 'us') {
-            $values = namesilo__transferUsDomain($vars, $params);
-        }
-    } else {
-    //Regular transfer call
-        $values = namesilo_transactionCall("Standard", $apiServerUrl . "/api/transferDomain?version=1&type=xml&key=$apiKey&domain=$sld.$tld&auth=$transfersecret&payment_id=$paymentid&private=$private&fn=$RegistrantFirstName&ln=$RegistrantLastName&ad=$RegistrantAddress1&ad2=$RegistrantAddress2&cy=$RegistrantCity&st=$RegistrantStateProvince&zp=$RegistrantPostalCode&ct=$RegistrantCountry&em=$RegistrantEmailAddress&ph=$RegistrantPhone&auto_renew=$auto_renew", $params);
-    }
-    
+    $values = namesilo_transactionCall("Standard", $apiServerUrl . "/api/transferDomain?version=1&type=xml&key=$apiKey&domain=$sld.$tld&auth=$transfersecret&payment_id=$paymentid&coupon=$coupon&private=$private&fn=$RegistrantFirstName&ln=$RegistrantLastName&ad=$RegistrantAddress1&ad2=$RegistrantAddress2&cy=$RegistrantCity&st=$RegistrantStateProvince&zp=$RegistrantPostalCode&ct=$RegistrantCountry&em=$RegistrantEmailAddress&ph=$RegistrantPhone&auto_renew=$auto_renew", $params);
     # Return Results
     return $values;
 }
 
 /*****************************************/
-/* TLD specific transfers                */
-/*****************************************/
-function namesilo__transferContactDomain($contactAddCall, $registrationTransferCall, $params, $vars) {
-//Registers a contact then uses that contact to register or transfer a domain
-//Required apiKey in $vars
-    
-    return namesilo__registerContactAction($contactAddCall, $registrationTransferCall, $params, $vars);
-}
-
-function namesilo__transferUsDomain($vars, $params) {
-//Required vars: apiServerUrl, apiKey, RegistrantFirstName, RegistrantLastName, RegistrantAddress1, RegistrantAddress2, RegistrantCity, RegistrantStateProvince, RegistrantPostalCode, RegistrantCountry, RegistrantEmailAddress, RegistrantPhone, sld, tld, transfersecret, paymentid, private, auto_renew
-    
-    $tldParams = namesilo__convertUsParams($params['additionalfields']['Nexus Category'], $params['additionalfields']['Application Purpose']);
-    
-    $newContactCall = $vars['apiServerUrl'] . "/api/contactAdd?version=1&type=xml&key=" . $vars['apiKey'] . "&fn=" . $vars['RegistrantFirstName'] . "&ln=" . $vars['RegistrantLastName'] . "&ad=" . $vars['RegistrantAddress1'] . "&ad2=" . $vars['RegistrantAddress2'] . "&cy=" . $vars['RegistrantCity'] . "&st=" . $vars['RegistrantStateProvince'] . "&zp=" . $vars['RegistrantPostalCode'] . "&ct=" . $vars['RegistrantCountry'] . "&em=" . $vars['RegistrantEmailAddress'] . "&ph=" . $vars['RegistrantPhone'];
-    
-    foreach ($tldParams as $apiParam => $apiVal) {
-        $newContactCall .= '&' . $apiParam . '=' . $apiVal;
-    }
-    
-    $newTransferCall = $vars['apiServerUrl'] . "/api/transferDomain?version=1&type=xml&key=" . $vars['apiKey'] . "&domain=" . $vars['sld'] . "." . $vars['tld'] . "&auth=" . $vars['transfersecret'] . "&payment_id=" . $vars['paymentid'] . "&private=" . $vars['private'] . "&auto_renew=" . $vars['auto_renew'];
-    
-    return namesilo__transferContactDomain($newContactCall, $newTransferCall, $params, $vars);
-}
-
-function namesilo__transferCaDomain($vars, $params) {
-//Required vars: apiServerUrl, apiKey, RegistrantFirstName, RegistrantLastName, RegistrantAddress1, RegistrantAddress2, RegistrantCity, RegistrantStateProvince, RegistrantPostalCode, RegistrantCountry, RegistrantEmailAddress, RegistrantPhone, sld, tld, transfersecret, paymentid, private, auto_renew
-    
-    if ($params['additionalfields']['CIRA Agreement'] != 'on') {
-        return ['error' => 'CIRA agreement not accepted.'];
-    }
-    
-    $params['additionalfields']['WHOIS Opt-out'] == 'on' || $vars['private'] == "1" ? $caWhoisPrivacy = 'on' : $caWhoisPrivacy = '';
-        
-    $tldParams = namesilo__convertCaParams($params['additionalfields']['Legal Type'], $caWhoisPrivacy);
-    
-    $newContactCall = $vars['apiServerUrl'] . "/api/contactAdd?version=1&type=xml&key=" . $vars['apiKey'] . "&fn=" . $vars['RegistrantFirstName'] . "&ln=" . $vars['RegistrantLastName'] . "&ad=" . $vars['RegistrantAddress1'] . "&ad2=" . $vars['RegistrantAddress2'] . "&cy=" . $vars['RegistrantCity'] . "&st=" . $vars['RegistrantStateProvince'] . "&zp=" . $vars['RegistrantPostalCode'] . "&ct=" . $vars['RegistrantCountry'] . "&em=" . $vars['RegistrantEmailAddress'] . "&ph=" . $vars['RegistrantPhone'];
-    
-    foreach ($tldParams as $apiParam => $apiVal) {
-        $newContactCall .= '&' . $apiParam . '=' . $apiVal;
-    }
-    
-    $newTransferCall = $vars['apiServerUrl'] . "/api/transferDomain?version=1&type=xml&key=" . $vars['apiKey'] . "&domain=" . $vars['sld'] . "." . $vars['tld'] . "&auth=" . $vars['transfersecret'] . "&payment_id=" . $vars['paymentid'] . "&private=" . $vars['private'] . "&auto_renew=" . $vars['auto_renew'];
-    
-    return namesilo__transferContactDomain($newContactCall, $newTransferCall, $params, $vars);
-}
-
-/*****************************************/
-/* Renew Domain                          */
+/* Renew Domain							 */
 /*****************************************/
 function namesilo_RenewDomain($params)
 {
@@ -940,19 +547,19 @@ function namesilo_RenewDomain($params)
     # Set Appropriate API Key
     $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
     # Register Variables
-    $paymentid = ($params['Test_Mode'] == 'on') ? $params['Sandbox_Payment_ID'] : $params['Payment_ID'];
-    //$coupon = urlencode($params["Coupon"]);
+    $paymentid = $params["Payment_ID"];
+    $coupon = urlencode($params["Coupon"]);
     $tld = urlencode($params["tld"]);
     $sld = urlencode($params["sld"]);
     $regperiod = $params["regperiod"];
     # Transaction Call
-    $values = namesilo_transactionCall("Standard", $apiServerUrl . "/api/renewDomain?version=1&type=xml&key=$apiKey&domain=$sld.$tld&years=$regperiod&payment_id=$paymentid", $params);
+    $values = namesilo_transactionCall("Standard", $apiServerUrl . "/api/renewDomain?version=1&type=xml&key=$apiKey&domain=$sld.$tld&years=$regperiod&payment_id=$paymentid&coupon=$coupon", $params);
     # Return Results
     return $values;
 }
 
 /*****************************************/
-/* Retrieve Domain Contact Details       */
+/* Retrieve Domain Contact Details		 */
 /*****************************************/
 function namesilo_GetContactDetails($params)
 {
@@ -1012,7 +619,7 @@ function namesilo_GetContactDetails($params)
 }
 
 /*****************************************/
-/* Update Domain Contact Details         */
+/* Update Domain Contact Details		 */
 /*****************************************/
 function namesilo_SaveContactDetails($params)
 {
@@ -1189,6 +796,149 @@ function namesilo_SaveContactDetails($params)
     return $values;
 }
 
+/**
+ * Check Domain Availability.
+ *
+ * Determine if a domain or group of domains are available for
+ * registration or transfer.
+ *
+ * @param array $params common module parameters
+ * @see https://developers.whmcs.com/domain-registrars/module-parameters/
+ *
+ * @see \WHMCS\Domains\DomainLookup\SearchResult
+ * @see \WHMCS\Domains\DomainLookup\ResultsList
+ *
+ * @throws Exception Upon domain availability check failure.
+ *
+ * @return \WHMCS\Domains\DomainLookup\ResultsList An ArrayObject based collection of \WHMCS\Domains\DomainLookup\SearchResult results
+ */
+function namesilo_CheckAvailability($params)
+{
+    # Set Appropriate API Server
+    $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
+    # Set Appropriate API Key
+    $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
+    # Register Variables
+    $tlds = $params["tlds"];
+    $sld = $params["sld"];
+    $domains = array();
+    foreach ($tlds as $tld) {
+        $domains[] = urldecode($sld.$tld);
+    }
+    $domainJoin = implode(',', $domains);
+    # Transaction Call
+    $result = namesilo_transactionCall("full", $apiServerUrl . "/api/checkRegisterAvailability?version=1&type=xml&key=$apiKey&domains=$domainJoin", $params);
+    # Return Results
+
+    $code = (int)$result->code;
+
+    if ($code !== 300) {
+        return array(
+            'error' => "internal error",
+        );
+    }
+
+    $results = new ResultsList();
+    foreach($result->available->domain as $itemDomain) {
+        $itemDomainName = explode('.', (string)$itemDomain);
+        $searchResult = new SearchResult($itemDomainName[0], '.'.$itemDomainName[1]);
+        $searchResult->setStatus(SearchResult::STATUS_NOT_REGISTERED);
+        $isPremium = (int)$itemDomain->attributes()->premium;
+        $price = (string)$itemDomain->attributes()->price;
+        $searchResult->setPremiumDomain((bool)$isPremium);
+        $searchResult->setPremiumCostPricing(
+            array(
+                'register' => $price,
+                'CurrencyCode' => 'USD',
+            )
+        );
+        $results->append($searchResult);
+    }
+    foreach($result->unavailable->domain as $itemDomain) {
+        $itemDomainName = explode('.', (string)$itemDomain);
+        $searchResult = new SearchResult($itemDomainName[0], '.'.$itemDomainName[1]);
+        $searchResult->setStatus(SearchResult::STATUS_REGISTERED);
+        $results->append($searchResult);
+    }
+
+    return $results;
+}
+
+/**
+ * Domain Suggestion Settings.
+ *
+ * Defines the settings relating to domain suggestions (optional).
+ * It follows the same convention as `getConfigArray`.
+ *
+ * @see https://developers.whmcs.com/domain-registrars/check-availability/
+ *
+ * @return array of Configuration Options
+ */
+function namesilo_DomainSuggestionOptions() {
+    return array();
+}
+
+/**
+ * Get Domain Suggestions.
+ *
+ * Provide domain suggestions based on the domain lookup term provided.
+ *
+ * @param array $params common module parameters
+ * @see https://developers.whmcs.com/domain-registrars/module-parameters/
+ *
+ * @see \WHMCS\Domains\DomainLookup\SearchResult
+ * @see \WHMCS\Domains\DomainLookup\ResultsList
+ *
+ * @throws Exception Upon domain suggestions check failure.
+ *
+ * @return \WHMCS\Domains\DomainLookup\ResultsList An ArrayObject based collection of \WHMCS\Domains\DomainLookup\SearchResult results
+ */
+function namesilo_GetDomainSuggestions($params)
+{
+    # Set Appropriate API Server
+    $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
+    # Set Appropriate API Key
+    $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
+    # Register Variables
+    $tlds = $params["tldsToInclude"];
+    $sld = $params["searchTerm"];
+    $domains = array();
+    foreach ($tlds as $tld) {
+        $domains[] = urldecode($sld.'.'.$tld);
+    }
+    $domainJoin = implode(',', $domains);
+    # Transaction Call
+    $result = namesilo_transactionCall("full", $apiServerUrl . "/api/checkRegisterAvailability?version=1&type=xml&key=$apiKey&domains=$domainJoin", $params);
+    # Return Results
+
+    $code = (int)$result->code;
+
+    if ($code !== 300) {
+        return array(
+            'error' => "internal error",
+        );
+    }
+
+    $results = new ResultsList();
+    foreach($result->available->domain as $itemDomain) {
+        $itemDomainName = explode('.', (string)$itemDomain);
+        $searchResult = new SearchResult($itemDomainName[0], '.'.$itemDomainName[1]);
+        $searchResult->setStatus(SearchResult::STATUS_NOT_REGISTERED);
+        $isPremium = (int)$itemDomain->attributes()->premium;
+        $price = (string)$itemDomain->attributes()->price;
+        $searchResult->setPremiumDomain((bool)$isPremium);
+        $searchResult->setPremiumCostPricing(
+            array(
+                'register' => $price,
+                'CurrencyCode' => 'USD',
+            )
+        );
+        $results->append($searchResult);
+    }
+
+    return $results;
+}
+
 /*****************************************/
 /* Send EPP Code to Domain Admin Contact */
 /*****************************************/
@@ -1288,7 +1038,7 @@ function namesilo_IDProtectToggle($params)
 }
 
 /*****************************************/
-/* Retrieve Domain's Email Forwards      */
+/* Retrieve Domain's Email Forwards		 */
 /*****************************************/
 function namesilo_GetEmailForwarding($params)
 {
@@ -1315,7 +1065,7 @@ function namesilo_GetEmailForwarding($params)
 }
 
 /*****************************************/
-/* Set Domain's Email Forwards           */
+/* Set Domain's Email Forwards   		 */
 /*****************************************/
 function namesilo_SaveEmailForwarding($params)
 {
@@ -1358,18 +1108,24 @@ function namesilo_SaveEmailForwarding($params)
 
 }
 
+/**
+ * Sync Domain Status & Expiration Date.
+ *
+ * Domain syncing is intended to ensure domain status and expiry date
+ * changes made directly at the domain registrar are synced to WHMCS.
+ * It is called periodically for a domain.
+ *
+ * @param array $params common module parameters
+ *
+ * @see https://developers.whmcs.com/domain-registrars/module-parameters/
+ *
+ * @return array
+ */
 function namesilo_Sync($params)
 {
     $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
     $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
-    
-    //Fix whmcs 8.0.0.3 domain param bug
-    if ($params['domain']) {
-        $domainName = $params['domain'];
-    } else {
-        $domainName = $params['sld'] . '.' . $params['tld'];
-    }
-    
+    $domainName = $params['domain'];
 
     try {
         /** @var SimpleXMLElement $result */
@@ -1413,8 +1169,19 @@ function namesilo_Sync($params)
     }
 }
 
+/**
+ * Incoming Domain Transfer Sync.
+ *
+ * Check status of incoming domain transfers and notify end-user upon
+ * completion. This function is called daily for incoming domains.
+ *
+ * @param array $params common module parameters
+ *
+ * @see https://developers.whmcs.com/domain-registrars/module-parameters/
+ *
+ * @return array
+ */
 function namesilo_TransferSync($params){
-    //logActivity('sync start');
     $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
     $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
     $domainName = $params['domain'];
@@ -1449,7 +1216,7 @@ function namesilo_TransferSync($params){
         if ($status === 'Transfer Completed'){
             return array(
                 'completed' => true, // Return as true upon successful completion of the transfer
-                'expirydate' => (string)$result->expiration, // The expiry date of the domain    
+                'expirydate' => (string)$result->expiration, // The expiry date of the domain
             );
         } else if (in_array($status, $transfer_failed_statuses)){
             return array(
@@ -1468,182 +1235,35 @@ function namesilo_TransferSync($params){
     }
 }
 
-function namesilo_CheckAvailability ($params) {
-    # Set Appropriate API Server
+function namesilo_GetTldPricing(array $params)
+{
     $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
-    # Set Appropriate API Key
     $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
-    
-    
-    # Register Variables;
-    //$tld = $params["tld"]; //tld is always empty for this function, search tlds are passed as an array in tldsToInclude
-    $sld = $params["sld"];
-    $tldsToInclude = $params["tldsToInclude"]; //if the tld is a match of one of the supported tlds it is sent in the array, if there is no match, the first supported TLD is used (.com on most cases)
-    //$premiumEnabled = (bool)$params["premiumEnabled"];
-    
-    $searchDomains = [];
-    $searchResults = new ResultsList();
-    
-    
-    //Prepare search array
-    foreach ($tldsToInclude as $iTld) {
-        $searchDomains[] = array("tld" => $iTld, "sld" => $sld, "searchTerm" => $sld  . $iTld, "searchResult" => null);
-    }
-    
-    $searchTerms = "";
-    foreach ($searchDomains as $sDomain) {
-        $searchTerms .= $sDomain["searchTerm"] . ",";
-    }
-    $searchTerms = substr($searchTerms, 0, -1);
-    
-    # Transaction Call
-    $values = namesilo_transactionCall("domainAvailability", $apiServerUrl . "/api/checkRegisterAvailability?version=1&type=xml&key=$apiKey&domains=$searchTerms", $params);
-    
-    //If results are returned (implies there is no error), match the results to the search array and create a SearchResults instance
-    if (isset($values["domains"])) {
-        foreach ($searchDomains as &$sDomain) {
-            foreach ($values["domains"] as $vDomain) {
-                if ($sDomain["searchTerm"] === $vDomain["domain"]) {
-                    $sResult = new SearchResult($sDomain["sld"], $sDomain["tld"]);
-                    
-                    if ($vDomain["status"] === "available") {
-                        $sResult->setStatus(SearchResult::STATUS_NOT_REGISTERED);
-                    } elseif ($vDomain["status"] === "unavailable") {
-                        $sResult->setStatus(SearchResult::STATUS_REGISTERED);
-                    } elseif ($vDomain["status"] === "invalid") {
-                        $sResult->setStatus(SearchResult::STATUS_TLD_NOT_SUPPORTED);
-                    }
-                    
-                    if ($vDomain["premium"] == "1") {
-                        $sResult->setPremiumDomain(true);
-                        
-                        $sResult->setPremiumCostPricing(array("register" => $vDomain["price"], /*"renew" => "",*/ "CurrencyCode" => "USD"));
-                        //Fix-me: the API doesn't return a renewal price for premium domains
-                    }
-                    
-                    $sDomain["searchResult"] = $sResult;
-                }
-            }
-        }
-        
-        //Create a SearchResult instance for any non-matched search item
-        foreach ($searchDomains as &$sDomain) {
-            if (is_null($sDomain["searchResult"])) {
-                $sResult = new SearchResult($sDomain["sld"], $sDomain["tld"]);
-                
-                $sResult->setStatus(SearchResult::STATUS_TLD_NOT_SUPPORTED);
-                
-                $sDomain["searchResult"] = $sResult;
-            }
-        }
-    } else {
-        //logActivity($values["error"]);
-        throw new Exception($values["error"]);
-        //return ['error' => 'ERROR: ' . $values["error"]]; //WHMCS refuses to accept this as valid
-    }
-    
-    //Fill the results object from the search array
-    foreach ($searchDomains as $sDomain) {
-        $searchResults->append($sDomain["searchResult"]);
-    }
-    
-    return $searchResults;
-}
 
-function namesilo_GetDomainSuggestions($params) {
-    # Set Appropriate API Server
-    $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
-    # Set Appropriate API Key
-    $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
-    
-    # Register Variables
-    //$tld = $params["tld"]; //tld is always empty for this function, search tlds are passed as an array in tldsToInclude
-    $sld = $params["searchTerm"]; //sld is empty for this function
-    $tldsToInclude = $params["tldsToInclude"];
-    //$premiumEnabled = (bool)$params["premiumEnabled"];
-    
-    $searchDomains = [];
-    $searchResults = new ResultsList();
-    
-    
-    //Prepare search array
-    
-    foreach ($tldsToInclude as $iTld) {
-        $searchDomains[] = array("tld" => "." . $iTld, "sld" => $sld, "searchTerm" => $sld  . "." . $iTld);
+    /** @var SimpleXMLElement $result */
+    $response = namesilo_transactionCall('tldPricing', $apiServerUrl . "/api/getTldPricing?version=1&type=xml&key=$apiKey", $params);
+    // Perform API call to retrieve extension information
+    // A connection error should return a simple array with error key and message
+    // return ['error' => 'This error occurred',];
+    if (empty($response['tlds'])) {
+        return $response;
     }
-    
-    $searchTerms = "";
-    foreach ($searchDomains as $sDomain) {
-        $searchTerms .= $sDomain["searchTerm"] . ",";
-    }
-    $searchTerms = substr($searchTerms, 0, -1);
-    
-    # Transaction Call
-    $values = namesilo_transactionCall("domainAvailability", $apiServerUrl . "/api/checkRegisterAvailability?version=1&type=xml&key=$apiKey&domains=$searchTerms", $params);
-    
-    //If results are returned (implies there is no error), match the results to the search array and create a SearchResults instance
-    //Results are matched to avoid dealing with tld, sld separation when creating the SearchResult instance
-    if (isset($values["domains"])) {
-        foreach ($searchDomains as $sDomain) {
-            foreach ($values["domains"] as $vDomain) {
-                if ($sDomain["searchTerm"] === $vDomain["domain"]) {
-                    if ($vDomain["status"] === "available") { //Only available domains are accepted in the suggestion list
-                        $sResult = new SearchResult($sDomain["sld"], $sDomain["tld"]);
-                        
-                        $sResult->setStatus(SearchResult::STATUS_NOT_REGISTERED);
-                        
-                        if ($vDomain["premium"] == "1") {
-                            $sResult->setPremiumDomain(true);
-                        
-                            $sResult->setPremiumCostPricing(array("register" => $vDomain["price"], /*"renew" => "",*/ "CurrencyCode" => "USD"));
-                            //Fix-me: the API doesn't return a renewal price for premium domains
-                        }
-                        
-                        $searchResults->append($sResult);
-                    }
-                }
-            }
-        }
-    } else {
-        //logActivity($values["error"]);
-        throw new Exception($values["error"]);
-        //return ['error' => 'ERROR: ' . $values["error"]]; //WHMCS refuses to accept this as valid
-    }
-    
-    return $searchResults;
-}
 
-function namesilo_GetTldPricing($params) {
-    # Set Appropriate API Server
-    $apiServerUrl = ($params['Test_Mode'] == 'on') ? TEST_API_SERVER : LIVE_API_SERVER;
-    # Set Appropriate API Key
-    $apiKey = ($params['Test_Mode'] == 'on') ? $params['Sandbox_API_Key'] : $params['Live_API_Key'];
-    
-    # Register Variables
-    $results = new ResultsList();
-    
-    # Transaction Call
-    $values = namesilo_transactionCall("domainPricing", $apiServerUrl . "/api/getPrices?version=1&type=xml&key=$apiKey", $params);
-    
-    //To-Do: add grace and redemtion fee days (some TLDs don't have redemption)
-    //To-Do: add redemption fee price
-    
-    if (isset($values["prices"])) { //If prices are returned transform them to a result list
-        foreach ($values["prices"] as $price) {
-            $item = new ImportItem();
-            $item->setExtension('.' . $price["tld"]);
-            $item->setCurrency('USD');
-            $item->setRegisterPrice((float)$price["registration"]);
-            $item->setRenewPrice((float)$price["renew"]);
-            $item->setTransferPrice((float)$price["transfer"]);
-            
-            $results->append($item);
-        }
-        
-        return $results;
-    } else {
-        //logActivity($values["error"]);
-        return ['error' => 'ERROR: ' . $values["error"]];
+    $results = new GtldResultsList;
+
+    foreach ($response['tlds'] as $tld) {
+        // All the set methods can be chained and utilised together.
+        $item = (new ImportItem)
+            ->setExtension((string)$tld->tld)
+            ->setMinYears((int)$tld->minPeriod)
+            ->setMaxYears((int)$tld->maxPeriod)
+            ->setRegisterPrice((float)$tld->registrationPrice)
+            ->setRenewPrice((float)$tld->renewalPrice)
+            ->setTransferPrice((float)$tld->transferPrice)
+            ->setCurrency((string)$tld->currencyCode)
+            ->setEppRequired(false);
+
+        $results[] = $item;
     }
-    
+    return $results;
 }
