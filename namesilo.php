@@ -1329,7 +1329,7 @@ function namesilo_SaveContactDetails($params)
     $c_admin_phone = trim(urlencode($current_admin['phone']));
     $c_admin_fax = trim(urlencode($current_admin['fax']));
 
-    $md5_c_admin = $c_admin_firstname . $c_admin_lastname . $c_admin_company . $c_admin_address . $c_admin_address2 . $c_admin_city . $c_admin_state . $c_admin_zip . $c_admin_country . $c_admin_email . $c_admin_phone . $c_admin_fax;
+    $md5_c_admin = md5($c_admin_firstname . $c_admin_lastname . $c_admin_company . $c_admin_address . $c_admin_address2 . $c_admin_city . $c_admin_state . $c_admin_zip . $c_admin_country . $c_admin_email . $c_admin_phone . $c_admin_fax);
 
     //Get Entered Admin Info
     $e_admin_firstname = trim(urlencode($params["contactdetails"]["Admin"]["First Name"]));
@@ -1345,7 +1345,7 @@ function namesilo_SaveContactDetails($params)
     $e_admin_phone = trim(urlencode($params["contactdetails"]["Admin"]["Phone"]));
     $e_admin_fax = trim(urlencode($params["contactdetails"]["Admin"]["Fax"]));
 
-    $md5_e_admin = $e_admin_firstname . $e_admin_lastname . $e_admin_company . $e_admin_address . $e_admin_address2 . $e_admin_city . $e_admin_state . $e_admin_zip . $e_admin_country . $e_admin_email . $e_admin_phone . $e_admin_fax;
+    $md5_e_admin = md5($e_admin_firstname . $e_admin_lastname . $e_admin_company . $e_admin_address . $e_admin_address2 . $e_admin_city . $e_admin_state . $e_admin_zip . $e_admin_country . $e_admin_email . $e_admin_phone . $e_admin_fax);
     //echo $md5_c_admin. '<br>'. $md5_e_admin; exit;
 
     //Create new contact profile and associate it if necessary
