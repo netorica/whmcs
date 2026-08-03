@@ -418,7 +418,7 @@ function namesilo_GetDomainInformation(array $params)
     if (isset($domain->locked) && (strcasecmp((string)$domain->locked, 'Yes') === 0)) {
         $response['transferlock'] = true;
     } else {
-        $response['transferlock'] = 'unlocked'; // safe default
+        $response['transferlock'] = false; // safe default
     }
 
     // Contact → registrant details
