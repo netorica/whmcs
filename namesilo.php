@@ -535,7 +535,7 @@ function namesilo_ResendIRTPVerificationEmail($params)
 }
 
 /*****************************************/
-/* Process .us/.ca params                */
+/* Process .us/.ca/.eu params            */
 /*****************************************/
 function namesilo__convertUsParams($whmcsNexusCategory, $whmcsApplicationPurpose)
 {
@@ -609,6 +609,28 @@ function namesilo__convertCaParams($whmcslegalType, $whmcsCiraWhoisPivacy)
     }
 
     return $nsCaData;
+}
+
+function namesilo__convertEuParams($entityType, $euCountryOfCitizenship)
+{
+    $code = strtoupper(trim((string)$euCountryOfCitizenship));
+
+    // WHMCS Options include EU / territory codes; NameSilo API expects ISO member-state codes
+    // see <whmcs>/app/resources/domains/dist.additionalfields.php
+    $citizenshipMap = [
+        'EL' => 'GR', // EU code for Greece → ISO
+        'AX' => 'FI', // Åland Islands → Finland
+        'GF' => 'FR', // French Guiana → France
+        'GP' => 'FR', // Guadeloupe → France
+        'MQ' => 'FR', // Martinique → France
+        'RE' => 'FR', // Réunion → France
+    ];
+
+    if (isset($citizenshipMap[$code])) {
+        $code = $citizenshipMap[$code];
+    }
+
+    return ['eucs' => urlencode($code)];
 }
 
 /*****************************************/
@@ -932,8 +954,8 @@ function namesilo_RegisterDomain($params)
     }
 
     # Transaction Call
-    //US-CA handling
-    if (strtolower($params['tld']) == 'ca' || strtolower($params['tld']) == 'us') {
+    //US-CA-EU handling
+    if (strtolower($params['tld']) == 'ca' || strtolower($params['tld']) == 'us' || strtolower($params['tld']) == 'eu') {
         $vars = array(
             'apiServerUrl' => $apiServerUrl,
             'apiKey' => $apiKey,
@@ -964,6 +986,8 @@ function namesilo_RegisterDomain($params)
             $values = namesilo__registerCaDomain($vars, $params);
         } elseif (strtolower($params['tld']) == 'us') {
             $values = namesilo__registerUsDomain($vars, $params);
+        } elseif (strtolower($params['tld']) == 'eu') {
+            $values = namesilo__registerEuDomain($vars, $params);
         }
     } else {
         //Regular registration call
@@ -1035,6 +1059,28 @@ function namesilo__registerCaDomain($vars, $params)
     $params['additionalfields']['WHOIS Opt-out'] == 'on' || $vars['private'] == "1" ? $caWhoisPrivacy = 'on' : $caWhoisPrivacy = '';
 
     $tldParams = namesilo__convertCaParams($params['additionalfields']['Legal Type'], $caWhoisPrivacy);
+
+    $newContactCall = $vars['apiServerUrl'] . "/api/contactAdd?version=1&type=xml&key=" . $vars['apiKey'] . "&fn=" . $vars['RegistrantFirstName'] . "&ln=" . $vars['RegistrantLastName'] . "&ad=" . $vars['RegistrantAddress1'] . "&ad2=" . $vars['RegistrantAddress2'] . "&cy=" . $vars['RegistrantCity'] . "&st=" . $vars['RegistrantStateProvince'] . "&zp=" . $vars['RegistrantPostalCode'] . "&ct=" . $vars['RegistrantCountry'] . "&em=" . $vars['RegistrantEmailAddress'] . "&ph=" . $vars['RegistrantPhone'];
+
+    foreach ($tldParams as $apiParam => $apiVal) {
+        $newContactCall .= '&' . $apiParam . '=' . $apiVal;
+    }
+
+    $newRegistrationCall = $vars['apiServerUrl'] . "/api/registerDomain?version=1&type=xml&key=" . $vars['apiKey'] . "&domain=" . $vars['sld'] . "." . $vars['tld'] . "&years=" . $vars['regperiod'] . "&payment_id=" . $vars['paymentid'] . "&private=" . $vars['private'] . "&ns1=" . $vars['nameserver1'] . "&ns2=" . $vars['nameserver2'] . "&ns3=" . $vars['nameserver3'] . "&ns4=" . $vars['nameserver4'] . "&ns5=" . $vars['nameserver5'] . "&auto_renew=" . $vars['auto_renew'];
+
+    return namesilo__registerContactDomain($newContactCall, $newRegistrationCall, $params, $vars);
+}
+
+function namesilo__registerEuDomain($vars, $params)
+{
+    $entityType = $params['additionalfields']['Entity Type'] ?? '';
+    $euCitizenship = $params['additionalfields']['EU Country of Citizenship'] ?? '';
+
+    if ($euCitizenship === '') {
+        return ['error' => 'EU Country of Citizenship is required for .EU domains.'];
+    }
+
+    $tldParams = namesilo__convertEuParams($entityType, $euCitizenship);
 
     $newContactCall = $vars['apiServerUrl'] . "/api/contactAdd?version=1&type=xml&key=" . $vars['apiKey'] . "&fn=" . $vars['RegistrantFirstName'] . "&ln=" . $vars['RegistrantLastName'] . "&ad=" . $vars['RegistrantAddress1'] . "&ad2=" . $vars['RegistrantAddress2'] . "&cy=" . $vars['RegistrantCity'] . "&st=" . $vars['RegistrantStateProvince'] . "&zp=" . $vars['RegistrantPostalCode'] . "&ct=" . $vars['RegistrantCountry'] . "&em=" . $vars['RegistrantEmailAddress'] . "&ph=" . $vars['RegistrantPhone'];
 
